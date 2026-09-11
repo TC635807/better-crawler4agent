@@ -1,0 +1,29 @@
+{
+  "name": "better-crawler-4-agent",
+  "version": "0.1.0",
+  "description": "Turn URLs into clean article text with a real browser. Handles JS-heavy and anti-bot sites (Zhihu, CSDN, Juejin) that plain HTTP fetchers miss. URL discovery is left to the caller.",
+  "description_i18n": {
+    "en": "URL to article text via a real stealth browser. Reliable on JS-heavy and anti-bot sites.",
+    "zh-CN": "用真实浏览器把 URL 变成干净正文，对 JS 站点与知乎/CSDN 等反爬站点有效。"
+  },
+  "author": {
+    "name": "KnowledgeDiver"
+  },
+  "license": "MIT",
+  "skills": "skills",
+  "mcpServers": {
+    "better-crawler": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "${ZCODE_PLUGIN_ROOT}/scripts/launch.py"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "BETTER_CRAWLER_TIMEOUT": "25",
+        "BETTER_CRAWLER_MAX_CHARS": "50000"
+      }
+    }
+  }
+}
