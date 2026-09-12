@@ -177,3 +177,57 @@ def test_describe_browser_error_maps_network_errors():
     assert "超时" in describe_browser_error("net::ERR_CONNECTION_TIMED_OUT")
     # 未知错误保留原文摘要，不丢信息
     assert "未知错误" in describe_browser_error("some unknown failure 未知错误")
+
+
+# ── 未渲染检测 ──────────────────────────────────────────
+
+
+def test_unrendered_detects_skeleton_page():
+    """HTML 框架很大但正文极少 → 骨架页，该重试。
+
+    实测万方检索页：失败时 193KB / 727 字符，成功时 481KB / 5720 字符。
+    """
+    from better_crawler import looks_unrendered
+
+    html = "<html><body>" + "<div class='nav'>导航</div>" * 2000 + "</body></html>"
+    assert len(html) > 30000
+    assert looks_unrendered(html, "导航" * 100)
+
+
+def test_unrendered_allows_rich_content():
+    from better_crawler import looks_unrendered
+
+    html = "<html><body>" + "<div>正文</div>" * 2000 + "</body></html>"
+    assert not looks_unrendered(html, "正文内容" * 1000)
+
+
+def test_unrendered_ignores_small_html():
+    """HTML 本身就小 → 不是骨架页，避免误判轻量页面。"""
+    from better_crawler import looks_unrendered
+
+    html = "<html><body><p>短</p></body></html>"
+    assert not looks_unrendered(html, "短")
+
+
+def test_unrendered_handles_empty():
+    from better_crawler import looks_unrendered
+
+    assert not looks_unrendered("", "")
+    assert not looks_unrendered("", "有内容" * 100)
+
+
+# ── 重试决策 ────────────────────────────────────────────
+
+
+def test_retry_only_for_transient_failures():
+    """5xx/429 与骨架页值得重试；404/403 是确定性的，重试没意义。"""
+    from better_crawler.fetcher import _worth_retrying
+
+    assert _worth_retrying(502, "网关错误")
+    assert _worth_retrying(503, "服务不可用")
+    assert _worth_retrying(429, "限流")
+    assert not _worth_retrying(404, "页面不存在")
+    assert not _worth_retrying(403, "拒绝访问")
+    # 无状态码时看原因描述
+    assert _worth_retrying(None, "服务器返回 HTTP 200 但页面无有效正文")
+    assert not _worth_retrying(None, "页面提示内容不存在或已被删除")

@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 # 低于此长度视为提取失败，触发下一级
 MIN_CONTENT_LENGTH = 200
 
+# 判定"疑似未渲染出内容"的经验阈值。
+# 实测万方检索页：接口概率性失败时 HTML 193KB 只有 727 字符（导航+登录弹窗），
+# 成功时 HTML 481KB / 5720 字符。HTML 结构不小但正文极少，是典型的骨架状态。
+_SUSPICIOUS_HTML_SIZE = 30_000
+_THIN_CONTENT = 1_500
+
 _NOISE_TAGS = (
     "script",
     "style",
@@ -265,3 +271,21 @@ def detect_error_page(html: str, content: str) -> str | None:
         if any(k in low for k in ("已删除", "违规", "仅作者可见", "需要登录")):
             return "页面疑似受限或已被删除"
     return None
+
+
+def looks_unrendered(html: str, content: str) -> bool:
+    """判断页面是否"结构已下载、但正文没渲染出来"。
+
+    这类站点（SPA、检索结果页）的 HTML 框架很大，内容靠接口异步填充。
+    接口概率性失败时，页面停在只有导航和弹窗的骨架状态——此时抓取
+    "成功"了，但拿到的不是用户想要的内容，应该重试。
+
+    判据：HTML 结构不小，但正文极少。两个阈值都取自实测（见文件顶部
+    常量注释）。HTML 很小的情况（真正的轻量页面）不算，避免误判。
+    """
+    if not html:
+        return False
+    # HTML 本身就不大 → 不是"框架大内容少"的骨架，按正常短页面处理
+    if len(html) < _SUSPICIOUS_HTML_SIZE:
+        return False
+    return len(content) < _THIN_CONTENT

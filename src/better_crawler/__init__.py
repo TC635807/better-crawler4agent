@@ -5,11 +5,11 @@
 
 from .browser import BrowserEngine, PageFetch
 from .errors import describe_status
-from .extract import Extracted, extract_static
+from .extract import Extracted, extract_static, looks_unrendered
 from .fetcher import Fetcher, FetchResult
 from .safety import UnsafeURLError, validate_url
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "BrowserEngine",
@@ -20,6 +20,7 @@ __all__ = [
     "UnsafeURLError",
     "describe_status",
     "extract_static",
+    "looks_unrendered",
     "validate_url",
     "__version__",
 ]

@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 
 from .browser import BrowserEngine, PageFetch
 from .errors import describe_status
-from .extract import MIN_CONTENT_LENGTH, detect_error_page, extract_static
+from .extract import (
+    MIN_CONTENT_LENGTH,
+    detect_error_page,
+    extract_static,
+    looks_unrendered,
+)
 from .safety import UnsafeURLError, validate_url
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,7 @@ class FetchResult:
     content_length: int = 0
     elapsed: float = 0.0
     error: str = ""
+    warning: str = ""                 # 拿到了内容但可能不完整时的提示
     truncated: bool = False
     attempts: list[dict] = field(default_factory=list)
 
@@ -56,9 +62,36 @@ class FetchResult:
             "tier": self.tier,
             "elapsed": round(self.elapsed, 2),
             "error": self.error,
+            "warning": self.warning,
             "truncated": self.truncated or (bool(max_chars) and len(self.content) > max_chars),
             "attempts": self.attempts,
         }
+
+
+def _clear_extracted(result: FetchResult) -> None:
+    """清空已提取的正文，为重试让位（保留 attempts 记录）。"""
+    result.ok = False
+    result.content = ""
+    result.title = ""
+    result.content_length = 0
+    result.tier = ""
+    result.error = ""
+
+
+def _worth_retrying(status: int | None, note: str) -> bool:
+    """判断这次失败重试是否有意义。
+
+    重试只在"服务器临时问题"或"页面没渲染出来"时有用：
+      - 5xx / 429：服务端异常或限流，换个时刻可能就好
+      - 骨架页（正文过少）：接口概率性失败，重试常能拿到
+    而 404 / 403 这类是确定性的，重试只是浪费一次加载。
+    """
+    if status is not None:
+        if status >= 500 or status == 429:
+            return True
+        if status >= 400:
+            return False
+    return "无有效正文" in note or "过短" in note or "未渲染" in note
 
 
 class Fetcher:
@@ -71,12 +104,16 @@ class Fetcher:
         use_browser: bool = True,
         use_static: bool = True,
         use_httpx: bool = True,
+        browser_retries: int = 2,
     ):
         self.engine = engine or BrowserEngine()
         self.timeout = timeout
         self.use_browser = use_browser
         self.use_static = use_static
         self.use_httpx = use_httpx
+        # 疑似未渲染时的额外尝试次数。默认 2 次：实测万方这类站
+        # 单次成功率约一半，两次重试后成功率明显提升，而耗时可控。
+        self.browser_retries = max(0, browser_retries)
         self._traf_fail: dict[str, float] = {}
 
     async def start(self) -> None:
@@ -104,26 +141,86 @@ class Fetcher:
 
         domain = _domain_of(url)
 
-        # Tier 1: 浏览器
+        # Tier 1: 浏览器（内容疑似没渲染出来时重试）。
+        # 部分站点的内容靠接口异步填充，而接口会概率性失败，页面停在
+        # 只有导航的骨架状态。此时抓取"成功"了但内容不对，重试通常能拿到。
+        # 全程保留最完整的一次结果，避免重试反而丢掉已拿到的内容。
         if self.use_browser:
-            page = PageFetch()
-            html = await self.engine.fetch_html_guarded(
-                url, timeout=self.timeout, result=page
-            )
-            if html:
-                note = await self._consume_html(html, result, "browser", page.status)
-                if note is None:
-                    result.elapsed = time.monotonic() - started
-                    return result
-                result.error = note
-                # 记下失败层的状态码，成功层没提供时用它兜底说明
+            best: tuple[str, str] = ("", "")
+            last_note = ""
+            for attempt in range(self.browser_retries + 1):
+                last = attempt >= self.browser_retries
+                page = PageFetch()
+                html = await self.engine.fetch_html_guarded(
+                    url, timeout=self.timeout, result=page
+                )
                 if page.status is not None:
                     result.status = page.status
-            elif page.error:
-                result.error = page.error
-                result.attempts.append(
-                    {"tier": "browser", "ok": False, "reason": page.error}
+                if not html:
+                    last_note = page.error or "浏览器未取到页面"
+                    result.attempts.append(
+                        {"tier": "browser", "ok": False, "reason": last_note}
+                    )
+                    break
+
+                note = await self._consume_html(
+                    html, result, "browser", page.status, record=False
                 )
+                if note is None:
+                    if len(result.content) > len(best[0]):
+                        best = (result.content, result.title or "")
+                    if not looks_unrendered(html, result.content):
+                        # 内容正常，记一条成功即可收工
+                        result.attempts.append(
+                            {"tier": "browser", "ok": True,
+                             "chars": result.content_length}
+                        )
+                        result.elapsed = time.monotonic() - started
+                        return result
+                    last_note = (
+                        f"正文仅 {result.content_length} 字符，疑似未渲染出内容"
+                    )
+                    if last:
+                        break
+                    _clear_extracted(result)
+                    continue
+
+                last_note = note
+                # 骨架页／5xx 重试有意义；404 这类确定性的重试无意义
+                if last or not _worth_retrying(page.status, note):
+                    break
+                _clear_extracted(result)
+
+            # 重试用尽仍未拿到正常内容，用历次最完整的一次兜底。
+            # 标 ok=True 但带 warning——内容可能不完整，让调用方能判断。
+            if best[0]:
+                result.ok = True
+                result.content = best[0]
+                result.title = best[1]
+                result.content_length = len(best[0])
+                result.tier = "browser"
+                result.error = ""
+                result.warning = (
+                    f"{last_note}；已返回最完整的一次结果"
+                    f"（{len(best[0])} 字符，共尝试 {self.browser_retries + 1} 次）"
+                )
+                result.attempts.append(
+                    {"tier": "browser", "ok": True, "chars": len(best[0]),
+                     "note": "重试后采用最完整的一次结果"}
+                )
+                # 已拿到内容（可能不完整）：不再降级。降级层拿到的是同一份
+                # HTML 的更差提取结果，只会把内容换得更少。
+                result.elapsed = time.monotonic() - started
+                return result
+            elif last_note:
+                result.error = last_note
+                result.attempts.append(
+                    {"tier": "browser", "ok": False, "reason": last_note}
+                )
+                # 确定性失败（404 等）不必再试其他层
+                if not _worth_retrying(result.status, last_note):
+                    result.elapsed = time.monotonic() - started
+                    return result
 
         # Tier 2: trafilatura 直取
         if self.use_static and not self._is_traf_cooling(domain):
@@ -187,11 +284,15 @@ class Fetcher:
         result: FetchResult,
         tier: str,
         status: int | None = None,
+        record: bool = True,
     ) -> str | None:
         """从 HTML 提取正文并写入 result。成功返回 None，否则返回失败原因。
 
         status >= 400 时即使提取到文字也不算成功：错误页往往带导航和
         站点说明，长度可能过阈值，但内容不是正文。
+
+        record=False 时不写 attempts：重试场景下由调用方统一记录，
+        否则每次尝试都留一条成功记录，语义会乱。
         """
         extracted = await asyncio.to_thread(extract_static, html)
         if extracted is None or len(extracted.content) < MIN_CONTENT_LENGTH:
@@ -199,7 +300,10 @@ class Fetcher:
             # 页面里却写着"页面不存在"，只报"无有效正文"会掩盖真实原因
             page_err = detect_error_page(html, extracted.content if extracted else "")
             if page_err:
-                result.attempts.append({"tier": tier, "ok": False, "reason": page_err})
+                if record:
+                    result.attempts.append(
+                        {"tier": tier, "ok": False, "reason": page_err}
+                    )
                 return page_err
 
             # 优先用错误状态码解释；2xx 但无正文属于内容问题，单独说明
@@ -210,21 +314,24 @@ class Fetcher:
                     if status == 200
                     else "提取不到有效正文"
                 )
-            result.attempts.append({"tier": tier, "ok": False, "reason": reason})
+            if record:
+                result.attempts.append({"tier": tier, "ok": False, "reason": reason})
             return reason
 
         # 长度够但可能是错误页（反爬/文章被删/404 页），单独识别
         err = detect_error_page(html, extracted.content)
         if err and len(extracted.content) < 500:
-            result.attempts.append({"tier": tier, "ok": False, "reason": err})
+            if record:
+                result.attempts.append({"tier": tier, "ok": False, "reason": err})
             return err
 
         if status is not None and status >= 400:
             reason = describe_status(status)
-            result.attempts.append(
-                {"tier": tier, "ok": False,
-                 "reason": f"{reason}；页面文字疑似错误页内容"}
-            )
+            if record:
+                result.attempts.append(
+                    {"tier": tier, "ok": False,
+                     "reason": f"{reason}；页面文字疑似错误页内容"}
+                )
             return reason
 
         result.ok = True
@@ -237,7 +344,10 @@ class Fetcher:
         # 而正文是从 trafilatura 层取到的，留旧的 502 会误导调用方。
         # 该层没提供状态码（如 trafilatura）时置空，表示未知。
         result.status = status
-        result.attempts.append({"tier": tier, "ok": True, "chars": len(extracted.content)})
+        if record:
+            result.attempts.append(
+                {"tier": tier, "ok": True, "chars": len(extracted.content)}
+            )
         return None
 
     async def _fetch_static(self, url: str) -> str | None:
