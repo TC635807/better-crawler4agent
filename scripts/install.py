@@ -35,8 +35,35 @@ def _venv_python(venv_dir: str) -> str:
     return os.path.join(venv_dir, "bin", "python")
 
 
-def _find_existing_browsers() -> str | None:
-    """找一个已有的 Playwright 浏览器目录，避免重复下载 ~700MB。"""
+def _required_revision(python: str) -> str | None:
+    """读出该解释器所装 playwright 需要的 chromium revision。"""
+    code = (
+        "import json,os,playwright;"
+        "d=os.path.join(os.path.dirname(playwright.__file__),'driver','package','browsers.json');"
+        "print(next(b['revision'] for b in json.load(open(d))['browsers']"
+        " if b['name']=='chromium'))"
+    )
+    try:
+        out = subprocess.run(
+            [python, "-c", code], capture_output=True, text=True, timeout=60
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _find_existing_browsers(python: str) -> str | None:
+    """找一个已有且 revision 匹配的 Playwright 浏览器目录。
+
+    浏览器与 playwright 版本强绑定（1.61→rev 1228，1.62→rev 1234），
+    只看目录存在会选到不匹配的，启动时才失败。所以这里要核对 revision。
+    """
+    want = _required_revision(python)
+    if not want:
+        return None
+    target = f"chromium-{want}"
     candidates = [
         os.getenv("BETTER_CRAWLER_BROWSERS_PATH", ""),
         os.getenv("PLAYWRIGHT_BROWSERS_PATH", ""),
@@ -49,7 +76,7 @@ def _find_existing_browsers() -> str | None:
         if not path or not os.path.isdir(path):
             continue
         try:
-            if any(e.startswith("chromium") for e in os.listdir(path)):
+            if target in os.listdir(path):
                 return path
         except OSError:
             continue
@@ -136,7 +163,7 @@ def main() -> int:
 
     if args.print_config:
         python = args.reuse_env and _venv_python(args.reuse_env) or sys.executable
-        print_configs(python, args.browsers_path or _find_existing_browsers())
+        print_configs(python, args.browsers_path or _find_existing_browsers(python))
         return 0
 
     # 1) 解释器
@@ -171,10 +198,10 @@ def main() -> int:
     elif browsers:
         print(f"[3/3] 使用指定浏览器目录: {browsers}")
     else:
-        found = _find_existing_browsers()
+        found = _find_existing_browsers(python)
         if found:
             browsers = found
-            print(f"[3/3] 复用已有浏览器: {found}")
+            print(f"[3/3] 复用已有且版本匹配的浏览器: {found}")
         else:
             print("[3/3] 下载 Chromium（约 170MB，国内网络可能较慢）...")
             target = os.path.join(_ROOT, ".playwright")
