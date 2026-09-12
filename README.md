@@ -1,114 +1,155 @@
 # better-crawler-4-agent
 
-把 URL 变成干净正文的 MCP server + skill。用真实浏览器渲染，所以知乎、CSDN、掘金、微信公众号、博客园这类"HTTP 直接抓回来是空壳"的站点也能拿到内容。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-8A2BE2.svg)](https://modelcontextprotocol.io)
+[![Playwright](https://img.shields.io/badge/Playwright-1.61-2EAD33.svg)](https://playwright.dev)
 
-**职责边界**：只做 URL → 正文。URL 从哪来不在本工具范围内——搜索、用户给的链接、页面里的链接，都由调用方（Agent）自己决定。这样工具保持单一职责，也不需要维护搜索 API。
+> 把 URL 变成干净正文的 MCP server。用真实浏览器渲染，知乎、CSDN、掘金这些"HTTP 抓回来是空壳"的站点也能拿到内容。
 
-## 为什么不用内置抓取
+一个标准 stdio MCP server，**不绑定任何客户端**——Claude Code、Cursor、Windsurf、Cline、Codex、ZCode 都能用。
 
-大多数 Agent 自带的网页抓取是 HTTP 客户端 + 正文提取，对静态站够用，但：
+<details>
+<summary><b>English summary</b></summary>
 
-- **JS 渲染的页面拿不到内容**——返回空壳或只有导航
-- **反爬站点被拦**——知乎返回 403，CSDN 返回 521
-- **正文提取退化**——页面上有内容，提取出来却是零散片段
+A vendor-neutral MCP server that turns URLs into clean article text using a real headless Chromium. Built for sites where plain HTTP fetching fails: JS-rendered pages and Chinese anti-bot sites like Zhihu, CSDN, and Juejin.
 
-本工具用真实 Chromium 渲染，并补了完整浏览器指纹（UA / Sec-Ch-Ua / Sec-Fetch-* 全套一致）与导航器覆盖，实测能稳定抓取上述站点。此外还处理了两个实际会踩的坑：知乎注入的**字体指纹蜜罐**（上万字符的重复串，纯按长度取会误选）和**假成功**（200 响应但实际是错误页/登录墙）。
+**Scope:** URL → text only. URL discovery is left to the caller, so the tool stays single-purpose and needs no search API keys.
 
-## 安装
+**Key features:** real browser rendering, tiered fallback (browser → trafilatura → httpx+full browser fingerprint), font honeypot detection, fake-success detection (200 responses that are actually error pages), SSRF protection, and per-tier diagnostics in every response.
+
+</details>
+
+---
+
+## 为什么需要它
+
+大多数 Agent 自带的网页抓取是 HTTP 客户端 + 正文提取。对静态站点够用，但遇到下面三种情况会失败：
+
+| 问题 | 表现 |
+|---|---|
+| **JS 渲染** | 返回空壳页面，只有导航和页脚 |
+| **反爬拦截** | 知乎返回 403，CSDN 返回 521 |
+| **提取退化** | 页面上有内容，提取出来却是零散片段 |
+
+本项目用真实 Chromium 渲染，并补齐完整浏览器指纹（UA / Sec-Ch-Ua / Sec-Fetch-* 全套一致）+ 导航器覆盖。
+
+### 实测对比
+
+同一组 6 个 URL，开浏览器 vs 关浏览器（本项目 `Fetcher`，2026-09 实测）：
+
+| | 成功率 | 知乎 | CSDN 字符数 | 博客园字符数 |
+|---|---|---|---|---|
+| **有浏览器** | **6/6 = 100%** | 27069 | 57218 | 15360 |
+| 无浏览器（仅静态路径） | 5/6 = 83% | **失败** | 13845（−76%） | 4627（−70%） |
+
+反爬站点直接失败，其他站点正文完整度也大幅下降——没有 JS 渲染只能拿到首屏片段。
+
+### 已实测可抓取的站点
+
+知乎专栏、CSDN、博客园、掘金、豆瓣读书、少数派、腾讯云社区、React 官方文档、Python 官方文档等。单页耗时 2–5 秒（浏览器暖启动后）。
+
+---
+
+## 快速开始
 
 ```bash
-# 完整安装（建 venv、装依赖、下载 Chromium）
+git clone git@github.com:TC635807/better-crawler4agent.git
+cd better-crawler4agent
 python scripts/install.py
-
-# 已有 Playwright 浏览器，复用它，不重复下载 ~700MB
-python scripts/install.py --browsers-path "C:\Users\you\AppData\Local\ms-playwright"
-
-# 复用已有 Python 环境（比如项目里的 .venv）
-python scripts/install.py --reuse-env "D:\some-project\.venv"
-
-# 只装依赖，浏览器稍后自己配
-python scripts/install.py --no-browser
 ```
 
-安装脚本会打印各 agent 的接入配置（解释器绝对路径 + 浏览器目录），直接复制粘贴即可，避免"装了但客户端拉不起来"。
+`install.py` 会自动：
 
-自检：
+1. 在仓库内建 `.venv` 并安装依赖
+2. 查找并复用系统中已有的 Playwright 浏览器（核对版本，避免重复下载 ~700MB）
+3. **打印各 agent 的接入配置**，复制粘贴即可
+
+验证安装：
 
 ```bash
 python scripts/selfcheck.py            # 依赖 + 浏览器 + 安全校验 + 真实抓取
 python scripts/selfcheck.py --offline  # 不联网
 ```
 
-## 接入任意 agent
-
-本工具是**标准 stdio MCP server**，不绑定任何厂商。任何支持 MCP 的客户端都能用。
-
-查看针对你所用 agent 的配置（不执行安装）：
+### 安装选项
 
 ```bash
-python scripts/install.py --print-config
+python scripts/install.py --print-config       # 只看配置，不安装
+python scripts/install.py --reuse-env <path>   # 复用已有 Python 环境
+python scripts/install.py --browsers-path <p>  # 指定已有浏览器目录
+python scripts/install.py --no-browser         # 稍后自己配浏览器
 ```
 
-### 通用 mcpServers 格式
+---
 
-Claude Code / Cursor / Windsurf / Cline 等都用这个格式：
+## 接入你的 Agent
+
+### 通用 `mcpServers` 格式
+
+Claude Code / Cursor / Windsurf / Cline 等通用：
 
 ```json
 {
   "mcpServers": {
     "better-crawler": {
-      "command": "D:\\better-crawler-4-agent\\.venv\\Scripts\\python.exe",
-      "args": ["D:\\better-crawler-4-agent\\scripts\\launch.py"],
+      "command": "D:\\better-crawler4agent\\.venv\\Scripts\\python.exe",
+      "args": ["D:\\better-crawler4agent\\scripts\\launch.py"],
       "env": {
-        "BETTER_CRAWLER_BROWSERS_PATH": "D:\\better-crawler-4-agent\\.playwright"
+        "BETTER_CRAWLER_BROWSERS_PATH": "D:\\better-crawler4agent\\.playwright"
       }
     }
   }
 }
 ```
 
-放置位置：
+> 路径用 `python scripts/install.py --print-config` 生成，它会填好你机器上的绝对路径。
+
+配置放置位置：
 
 | 客户端 | 位置 |
 |---|---|
 | Claude Code | 项目级 `<项目>/.mcp.json`，或用户级 `~/.claude.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf / Cline | 各自的 MCP 设置里粘贴 JSON |
-| ZCode | `~/.zcode/cli/config.json` 的 `mcp.servers` 字段（注意是 `mcp.servers`，不是 `mcpServers`） |
-| Codex | `~/.codex/config.toml`，用 `[mcp_servers.better-crawler]` TOML 段 |
+| ZCode | `~/.zcode/cli/config.json` 的 `mcp.servers` 字段 |
+| Codex | `~/.codex/config.toml` → `[mcp_servers.better-crawler]` |
 
-仓库根目录也带了一份 `.mcp.json`，用相对路径，方便直接引用。
+仓库根目录带了一份 `.mcp.json`（相对路径），可直接引用。
 
-### 不经 MCP 直接用
+### 不用 MCP，直接当库调用
 
 ```python
 import sys
-sys.path.insert(0, r"D:\better-crawler-4-agent\src")
+sys.path.insert(0, r"D:\better-crawler4agent\src")
 
 from better_crawler import Fetcher
 
-f = Fetcher()
-await f.start()
-result = await f.fetch("https://example.com/article")
-print(result.content)
-await f.close()
+async def main():
+    f = Fetcher()
+    await f.start()                                  # 预热浏览器
+    result = await f.fetch("https://example.com/article")
+    if result.ok:
+        print(result.content)
+        print(f"命中层级: {result.tier}, {result.content_length} 字符")
+    else:
+        print(f"失败: {result.error}")
+    await f.close()
 ```
 
 `install.py --print-config` 会打印适合你环境的这段代码。
 
-### skill 复用
-
-`skills/web-to-text/SKILL.md` 是纯 Markdown，与厂商无关。支持 skill 的 agent（Claude Code、ZCode 等）可直接把 `skills/` 下的目录复制到自己的 skill 目录；不支持的，可以把内容并入系统提示词或项目说明文件。
+---
 
 ## 工具
 
 | 工具 | 说明 |
 |---|---|
-| `fetch_url(url, max_chars)` | 抓单个页面，返回正文与元信息 |
-| `fetch_urls(urls, max_chars, max_concurrent)` | 并发抓多个，逐条独立成败，最多 20 条 |
+| `fetch_url(url, max_chars)` | 抓单个页面 |
+| `fetch_urls(urls, max_chars, max_concurrent)` | 并发抓取，逐条独立成败，最多 20 条 |
 | `crawler_status()` | 查浏览器状态，排查启动失败 |
 
-返回结构：
+### 返回结构
 
 ```json
 {
@@ -125,17 +166,44 @@ await f.close()
 }
 ```
 
-`tier` 说明命中哪条路径：`browser`（浏览器渲染）> `trafilatura`（静态快路径）> `httpx`（指纹兜底）。`content_length` 是截断前的真实长度；`truncated` 表示返回内容被 `max_chars` 截过。失败时 `attempts` 会记录每一层的具体原因，而不是只给一个"失败"。
+设计要点是**不只返回成功/失败**：
+
+- `tier` — 命中哪条路径：`browser` > `trafilatura` > `httpx`
+- `content_length` — 截断前的真实长度（`truncated` 表示返回内容被 `max_chars` 截过）
+- `attempts` — 失败时记录每一层的具体原因，而不是只给一句"失败"
+
+---
 
 ## 抓取策略
 
-分层降级，每层都记耗时与命中情况：
+分层降级，每层记录耗时与命中情况：
 
-1. **浏览器渲染**（主路径）——共享单例 Chromium，信号量限并发，崩溃自动重建。冷启动约 2-7s，之后单页 2-5s
-2. **trafilatura 直取**（快路径）——静态站约 1s。对反爬站会记录失败域名，10 分钟内跳过这层，省掉无谓试错
-3. **httpx + 完整指纹**（兜底）——补 Sec-Ch-Ua / Sec-Fetch-* / HTTP2，CSDN 等站的 521 主要靠这套头解决
+```
+1. 浏览器渲染（主路径）
+   共享单例 Chromium + 信号量限并发 + 崩溃自动重建
+   冷启动 2–7s，之后单页 2–5s
 
-浏览器不可用时（未安装等）会自动降级为后两层，`crawler_status` 会给出原因。
+2. trafilatura 直取（快路径）
+   静态站约 1s；反爬站记录失败域名，10 分钟内跳过这层
+
+3. httpx + 完整浏览器指纹（兜底）
+   补 Sec-Ch-Ua / Sec-Fetch-* / HTTP2，解决 CSDN 等站的 521
+```
+
+浏览器不可用时（未安装等）自动降级为后两层，`crawler_status` 会给出原因。
+
+### 工程细节
+
+这些是踩坑换来的，改动前请先读代码注释：
+
+- **单例浏览器 + 信号量** — 每 URL 起一个 Chromium 会迅速吃满内存
+- **`asyncio.shield` + `done_callback`** — 超时取消会让 Playwright 内部 future 异常泄漏（`TargetClosedError: future exception was never retrieved`）
+- **崩溃检测 + 单例重置** — Chromium 挂掉后必须重建，否则后续全部失败
+- **字体蜜罐识别** — 知乎会注入上万字符的 `mmmmlli` 重复串，纯按长度取正文会误选它
+- **假成功识别** — 200 响应可能是错误页、登录墙或文章已删除（知乎会渲染一张沙漠插画）
+- **`--headless=new`** — 缺了它，部分站点只返回空壳
+
+---
 
 ## 配置
 
@@ -147,8 +215,20 @@ await f.close()
 | `BETTER_CRAWLER_BROWSERS_PATH` | — | Chromium 所在目录 |
 | `BETTER_CRAWLER_TIMEOUT` | `25` | 单页抓取超时（秒） |
 | `BETTER_CRAWLER_MAX_CHARS` | `50000` | 默认正文返回上限 |
-| `BETTER_CRAWLER_ALLOW_PRIVATE` | `0` | 设为 `1` 放开内网地址限制（仅本地调试） |
+| `BETTER_CRAWLER_ALLOW_PRIVATE` | `0` | 设为 `1` 放开内网限制（仅本地调试） |
 | `BETTER_CRAWLER_LOG_LEVEL` | `INFO` | 日志级别（输出到 stderr） |
+
+### 关于 Playwright 版本
+
+`requirements.txt` **锁定** `playwright==1.61.0`。原因是 playwright 与浏览器 revision 强绑定（1.61 → rev 1228，1.62 → rev 1234），放宽版本会让"复用已有浏览器"因 revision 不匹配而静默失败。
+
+升级 playwright 时必须同步重装浏览器：
+
+```bash
+python -m playwright install chromium
+```
+
+---
 
 ## 安全
 
@@ -156,17 +236,15 @@ await f.close()
 - 解析目标主机名，拒绝回环、内网、链路本地、云元数据地址（`127.0.0.1`、`192.168.*`、`169.254.169.254` 等）
 - 默认拒绝，本地调试需显式设 `BETTER_CRAWLER_ALLOW_PRIVATE=1`
 
-注意：一个"抓任意 URL"的工具本质上是本地网络请求原语，请只在可信环境启用。
+> 一个"抓任意 URL"的工具本质上是本地网络请求原语。请只在可信环境启用。
 
-## 合规
+---
 
-抓取请遵守目标站点的 robots.txt 与服务条款。本工具适合按需读取具体页面，不要用于高频批量抓取。
-
-## 结构
+## 项目结构
 
 ```
-better-crawler-4-agent/
-├── .mcp.json                    # 通用 MCP 配置（相对路径，可直接引用）
+better-crawler4agent/
+├── .mcp.json                    # 通用 MCP 配置（相对路径）
 ├── skills/web-to-text/SKILL.md  # 技能：何时用、如何选 URL、如何判断结果
 ├── src/better_crawler/
 │   ├── browser.py               # 共享 Chromium 单例、指纹、崩溃重建
@@ -178,10 +256,34 @@ better-crawler-4-agent/
 │   ├── launch.py                # 启动器：解析解释器与浏览器路径
 │   ├── install.py               # 安装 + 打印各 agent 配置
 │   └── selfcheck.py             # 自检
-├── requirements.txt
-└── pyproject.toml
+└── tests/test_core.py           # 单元测试（不联网）
 ```
+
+### 关于 skill
+
+`skills/web-to-text/SKILL.md` 是纯 Markdown，与厂商无关，内容涵盖：何时该抓取、如何挑选高质量 URL（避开 `/tag/` `/user/` `/video/` 等聚合页）、如何判断结果是否可信。
+
+支持 skill 的 agent（Claude Code、ZCode 等）可直接复制目录；不支持的，可把内容并入系统提示词。
+
+---
+
+## 开发
+
+```bash
+python -m pytest tests/ -q        # 单元测试（24 项，不联网）
+python scripts/selfcheck.py       # 端到端自检（15 项，含真实抓取）
+```
+
+单元测试覆盖 SSRF 防护、蜜罐识别、正文提取、错误页识别。自检额外验证依赖可用性、浏览器启动与真实抓取（`--offline` 跳过抓取，为 12 项）。
+
+---
+
+## 合规
+
+抓取请遵守目标站点的 `robots.txt` 与服务条款。本工具适合按需读取具体页面，**不要用于高频批量抓取**。
+
+---
 
 ## License
 
-MIT
+[MIT](LICENSE)
