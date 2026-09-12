@@ -239,6 +239,9 @@ def detect_error_page(html: str, content: str) -> str | None:
 
     返回错误说明，正常页面返回 None。反爬拦截和文章被删都可能返回
     200 + 一小段无关内容，只看长度会误判成成功。
+
+    注意：只在确有错误特征时返回说明。页面只是短（比如图片为主的文章）
+    时返回 None，由调用方按"内容过短"处理，避免误报成错误页。
     """
     if not html:
         return None
@@ -247,10 +250,18 @@ def detect_error_page(html: str, content: str) -> str | None:
     # 知乎的文章不存在/已删除会渲染一张沙漠插画
     if "liukanshan_desert" in low:
         return "页面提示文章不存在或已删除（知乎错误页）"
+
+    # 带 200 状态码的错误页：站点用自己的模板渲染"页面不存在"
+    if any(
+        k in low
+        for k in ("页面不存在", "指定的页面不存在", "页面已删除", "page not found",
+                  "404 not found", "404 错误", "该页面无法访问")
+    ):
+        return "页面提示内容不存在或已被删除（服务端返回 200）"
+
     if len(content) < MIN_CONTENT_LENGTH:
         if any(k in low for k in ("验证码", "captcha", "人机验证", "安全检查")):
             return "疑似被反爬拦截（要求验证码）"
-        if any(k in low for k in ("404", "not found", "页面不存在", "已删除", "违规")):
-            return "页面疑似不存在或已被删除"
-        return "正文过短，可能未成功渲染"
+        if any(k in low for k in ("已删除", "违规", "仅作者可见", "需要登录")):
+            return "页面疑似受限或已被删除"
     return None

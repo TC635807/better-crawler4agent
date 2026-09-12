@@ -33,6 +33,7 @@ description: Turn URLs into clean article text using a real browser, reliable on
   "title": "页面标题",
   "content": "正文文本",
   "content_length": 13845,
+  "status": 200,
   "tier": "browser",
   "elapsed": 3.0,
   "error": "",
@@ -41,6 +42,7 @@ description: Turn URLs into clean article text using a real browser, reliable on
 }
 ```
 
+- `status` 是服务器返回的 HTTP 状态码，配合 `error` 判断失败原因（详见下文）
 - `tier` 说明命中哪条路径：`browser`（浏览器渲染，最强）> `trafilatura`（静态站快路径）> `httpx`（指纹兜底）
 - `ok: false` 时看 `error` 和 `attempts`，里面有每一层失败的具体原因
 - `content_length` 是**截断前**的真实长度，`truncated` 表示返回的 `content` 被 `max_chars` 截过
@@ -73,14 +75,30 @@ description: Turn URLs into clean article text using a real browser, reliable on
 
 ## 判断结果是否可信
 
-不要只看 `ok`。这几种情况要警惕：
+不要只看 `ok`。返回里的 `status` 和 `error` 能告诉你该重试还是该换 URL。
 
-- **`ok: true` 但 `content_length` 很小（< 500）** —— 可能抓到的是错误页、登录墙或图片为主的页面。看 `content` 开头是不是正文
-- **正文含"验证码""人机验证""安全验证"** —— 被反爬拦了
-- **正文是重复字符**（如 `mmmmmlli`）—— 站点注入的字体指纹蜜罐，本工具已过滤，若仍出现请报告
-- **`tier` 是 `httpx` 或 `trafilatura`** —— 静态路径成功，但内容可能不如浏览器渲染完整
+### 失败时怎么办
 
-内容不对时，先确认 URL 本身是有效文章页——很多"抓取失败"其实是链接已失效。
+| `error` 内容 | 含义 | 行动 |
+|---|---|---|
+| `HTTP 404（页面不存在）` | URL 失效 | **换 URL**，别重试 |
+| `HTTP 410（页面已永久移除）` | 内容已删除 | 换 URL |
+| `HTTP 403（服务器拒绝访问）` | 触发反爬 | 可重试一次 |
+| `HTTP 429（请求过于频繁）` | 被限流 | 降低频率后重试 |
+| `HTTP 502 / 503 / 504` | 服务端异常 | 稍后重试 |
+| `页面提示内容不存在或已被删除（服务端返回 200）` | **软 404**：状态码正常但页面是错误页 | 换 URL |
+| `HTTP 200 但页面无有效正文` | 页面存在但无文字（纯图片/需登录） | 换 URL 或接受现状 |
+| `域名无法解析（DNS 问题）` | 网络/DNS 环境问题 | 检查网络，或报告给用户 |
+| `抓取超时（>N 秒）` | 页面太慢或卡住 | 可重试一次 |
+
+**连续失败不要反复重试同一个 URL**——多数失败是 URL 本身无效，重试只是浪费时间。
+
+### 成功时也要看一眼
+
+- **`ok: true` 但 `content_length` 很小（< 500）** — 可能是图片为主的页面或登录墙，扫一眼 `content` 开头确认是不是正文
+- **正文含"验证码""人机验证""安全验证"** — 被反爬拦了
+- **正文是重复字符**（如 `mmmmmlli`）— 站点注入的字体指纹蜜罐，本工具已过滤，若仍出现请报告
+- **`tier` 是 `httpx` 或 `trafilatura`** — 静态路径成功，但内容可能不如浏览器渲染完整
 
 ## 常见问题
 

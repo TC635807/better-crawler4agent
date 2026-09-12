@@ -129,3 +129,51 @@ def test_detect_captcha():
 def test_detect_normal_page_returns_none():
     html = "<html><body>" + "正常正文内容" * 100 + "</body></html>"
     assert detect_error_page(html, "正常正文内容" * 100) is None
+
+
+def test_detect_soft_404_returns_200_error_page():
+    """站点用 200 状态码渲染"页面不存在"，必须识别为错误页。"""
+    html = (
+        "<html><head><title>指定的页面不存在</title></head>"
+        "<body>指定的页面不存在 404 错误 站长请点击 返回上一级>></body></html>"
+    )
+    err = detect_error_page(html, "指定的页面不存在 404 错误")
+    assert err is not None
+    assert "不存在" in err
+
+
+def test_detect_short_page_is_not_error():
+    """页面只是短（如图片为主的文章）不该误报成错误页。"""
+    html = "<html><head><title>图片文章</title></head><body><p>见下图</p></body></html>"
+    assert detect_error_page(html, "见下图") is None
+
+
+# ── 状态码说明 ──────────────────────────────────────────
+
+
+def test_describe_status_maps_common_codes():
+    from better_crawler import describe_status
+
+    assert "404" in describe_status(404)
+    assert "不存在" in describe_status(404)
+    assert "502" in describe_status(502)
+    assert "限流" in describe_status(429)
+    assert "反爬" in describe_status(403)
+
+
+def test_describe_status_ignores_success_codes():
+    """2xx/3xx 表示请求成功，不该被当作错误原因。"""
+    from better_crawler import describe_status
+
+    for code in (200, 201, 204, 301, 302, 304):
+        assert describe_status(code) == ""
+    assert describe_status(None) == ""
+
+
+def test_describe_browser_error_maps_network_errors():
+    from better_crawler.errors import describe_browser_error
+
+    assert "DNS" in describe_browser_error("net::ERR_NAME_NOT_RESOLVED")
+    assert "超时" in describe_browser_error("net::ERR_CONNECTION_TIMED_OUT")
+    # 未知错误保留原文摘要，不丢信息
+    assert "未知错误" in describe_browser_error("some unknown failure 未知错误")

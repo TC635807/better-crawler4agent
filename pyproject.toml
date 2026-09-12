@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "better-crawler-4-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Turn URLs into clean article text with a real browser. Reliable on JS-heavy and anti-bot sites."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -15,9 +15,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PageFetch:
+    """一次浏览器抓取的附带信息（状态码、错误原因）。
+
+    单独用输出参数而不是让 fetch_html 返回元组，是为了不改变
+    "返回 HTML 字符串或 None" 这个简单契约。
+    """
+    status: int | None = None
+    error: str = ""
 
 # 一次只跑少量页面，太多会导致 Chromium OOM/崩溃
 _MAX_CONCURRENCY = 5
@@ -161,6 +173,7 @@ class BrowserEngine:
         timeout: float = 25.0,
         wait_after_load: float = 1.2,
         simulate_user: bool = True,
+        result: "PageFetch | None" = None,
     ) -> str | None:
         """取回渲染后的 HTML。失败返回 None。
 
@@ -169,8 +182,12 @@ class BrowserEngine:
             timeout: 整页超时（秒）
             wait_after_load: 加载后额外等待，给 JS 渲染留时间
             simulate_user: 是否模拟鼠标移动/滚动
+            result: 传入 PageFetch 时，会把状态码/错误原因写进去，
+                    让调用方能区分"页面不存在"和"抓取被拦"
         """
         if not await self.start():
+            if result is not None:
+                result.error = self.unavailable_reason or "浏览器不可用"
             return None
 
         page_timeout_ms = max(int(timeout * 1000), 5000)
@@ -179,9 +196,11 @@ class BrowserEngine:
             page = None
             try:
                 page = await self._context.new_page()
-                await page.goto(
+                response = await page.goto(
                     url, wait_until="domcontentloaded", timeout=page_timeout_ms
                 )
+                if result is not None and response is not None:
+                    result.status = response.status
                 if simulate_user:
                     # 只发鼠标/滚轮信号，不点固定坐标（可能误触链接跳走）
                     await page.mouse.move(
@@ -193,12 +212,18 @@ class BrowserEngine:
                 return await page.content()
             except asyncio.TimeoutError:
                 logger.debug("[engine] 超时: %s", url[:60])
+                if result is not None:
+                    result.error = f"页面加载超时（>{int(timeout)} 秒）"
                 return None
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 if any(marker in msg for marker in _CRASH_MARKERS):
                     self._mark_crashed()
                 logger.debug("[engine] 抓取失败: %s - %s", msg[:80], url[:60])
+                if result is not None:
+                    from .errors import describe_browser_error
+
+                    result.error = describe_browser_error(msg)
                 return None
             finally:
                 if page is not None:
@@ -213,6 +238,7 @@ class BrowserEngine:
         timeout: float = 25.0,
         wait_after_load: float = 1.2,
         simulate_user: bool = True,
+        result: "PageFetch | None" = None,
     ) -> str | None:
         """带整体超时保护的 fetch_html。
 
@@ -220,7 +246,7 @@ class BrowserEngine:
         而是挂一个 done_callback 把结果/异常消费掉，然后放弃等待。
         """
         task = asyncio.ensure_future(
-            self.fetch_html(url, timeout, wait_after_load, simulate_user)
+            self.fetch_html(url, timeout, wait_after_load, simulate_user, result)
         )
         try:
             return await asyncio.wait_for(asyncio.shield(task), timeout=timeout + 5)
@@ -229,6 +255,8 @@ class BrowserEngine:
                 lambda t: t.exception() if not t.cancelled() else None
             )
             logger.debug("[engine] 整体超时，放弃等待: %s", url[:60])
+            if result is not None:
+                result.error = f"抓取超时（>{int(timeout)} 秒）"
             return None
         except Exception:  # noqa: BLE001
             return None

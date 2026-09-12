@@ -158,6 +158,7 @@ async def main():
   "title": "页面标题",
   "content": "正文……",
   "content_length": 13845,
+  "status": 200,
   "tier": "browser",
   "elapsed": 3.0,
   "error": "",
@@ -168,9 +169,23 @@ async def main():
 
 设计要点是**不只返回成功/失败**：
 
+- `status` — 服务器返回的 HTTP 状态码，用来区分"页面不存在"（404）与"抓取被拦"（403/429）
 - `tier` — 命中哪条路径：`browser` > `trafilatura` > `httpx`
 - `content_length` — 截断前的真实长度（`truncated` 表示返回内容被 `max_chars` 截过）
-- `attempts` — 失败时记录每一层的具体原因，而不是只给一句"失败"
+- `attempts` — 每一层的具体结果与失败原因
+
+失败时 `error` 会给出可操作的原因，而不是笼统的"抓取失败"：
+
+| error 内容 | 含义 | 该怎么做 |
+|---|---|---|
+| `服务器返回 HTTP 404（页面不存在）` | URL 失效 | 换 URL |
+| `服务器返回 HTTP 403（服务器拒绝访问（可能触发反爬））` | 被拦截 | 可重试 |
+| `服务器返回 HTTP 502（网关错误（服务端异常））` | 服务端异常 | 稍后重试 |
+| `页面提示内容不存在或已被删除（服务端返回 200）` | **软 404**：状态码正常但页面是错误页 | 换 URL |
+| `服务器返回 HTTP 200 但页面无有效正文` | 页面存在但没有正文（如纯图片/需登录） | 视情况 |
+| `域名无法解析（DNS 问题）` | 网络环境问题 | 检查 DNS/网络 |
+
+最后两类值得注意：站点可能用 **200 状态码**渲染"页面不存在"，或者页面确实没有文字内容。只看 HTTP 状态码会误判成成功，所以本工具会额外识别页面级错误特征。
 
 ---
 
@@ -201,6 +216,7 @@ async def main():
 - **崩溃检测 + 单例重置** — Chromium 挂掉后必须重建，否则后续全部失败
 - **字体蜜罐识别** — 知乎会注入上万字符的 `mmmmlli` 重复串，纯按长度取正文会误选它
 - **假成功识别** — 200 响应可能是错误页、登录墙或文章已删除（知乎会渲染一张沙漠插画）
+- **错误原因分类** — HTTP 状态码与 Chromium 网络错误映射成可读说明，让调用方能判断该重试还是换 URL
 - **`--headless=new`** — 缺了它，部分站点只返回空壳
 
 ---
@@ -250,6 +266,7 @@ better-crawler4agent/
 │   ├── browser.py               # 共享 Chromium 单例、指纹、崩溃重建
 │   ├── extract.py               # 正文提取 + 蜜罐识别 + 错误页识别
 │   ├── fetcher.py               # 分层编排
+│   ├── errors.py                # HTTP 状态码与网络错误 → 可读说明
 │   ├── safety.py                # SSRF 防护
 │   └── mcp_server.py            # MCP 工具定义
 ├── scripts/
@@ -270,7 +287,7 @@ better-crawler4agent/
 ## 开发
 
 ```bash
-python -m pytest tests/ -q        # 单元测试（24 项，不联网）
+python -m pytest tests/ -q        # 单元测试（29 项，不联网）
 python scripts/selfcheck.py       # 端到端自检（15 项，含真实抓取）
 ```
 
