@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "better-crawler": {
+      "command": "python",
+      "args": [
+        "scripts/launch.py"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "BETTER_CRAWLER_TIMEOUT": "25",
+        "BETTER_CRAWLER_MAX_CHARS": "50000"
+      }
+    }
+  }
+}

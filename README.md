@@ -30,7 +30,7 @@ python scripts/install.py --reuse-env "D:\some-project\.venv"
 python scripts/install.py --no-browser
 ```
 
-安装脚本会把解释器绝对路径与浏览器目录写回 `.zcode-plugin/plugin.json`，避免"装了但客户端拉不起来"。
+安装脚本会打印各 agent 的接入配置（解释器绝对路径 + 浏览器目录），直接复制粘贴即可，避免"装了但客户端拉不起来"。
 
 自检：
 
@@ -39,26 +39,66 @@ python scripts/selfcheck.py            # 依赖 + 浏览器 + 安全校验 + 真
 python scripts/selfcheck.py --offline  # 不联网
 ```
 
-## 作为 ZCode 插件使用
+## 接入任意 agent
 
-把仓库目录加入插件市场（Settings → Plugin Management → Discover → `+` → 本地目录），或直接在 `.zcode/config.json` 里声明 MCP server：
+本工具是**标准 stdio MCP server**，不绑定任何厂商。任何支持 MCP 的客户端都能用。
+
+查看针对你所用 agent 的配置（不执行安装）：
+
+```bash
+python scripts/install.py --print-config
+```
+
+### 通用 mcpServers 格式
+
+Claude Code / Cursor / Windsurf / Cline 等都用这个格式：
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "better-crawler": {
-        "type": "stdio",
-        "command": "D:\\better-crawler-4-agent\\.venv\\Scripts\\python.exe",
-        "args": ["D:\\better-crawler-4-agent\\scripts\\launch.py"],
-        "env": {
-          "BETTER_CRAWLER_BROWSERS_PATH": "D:\\better-crawler-4-agent\\.playwright"
-        }
+  "mcpServers": {
+    "better-crawler": {
+      "command": "D:\\better-crawler-4-agent\\.venv\\Scripts\\python.exe",
+      "args": ["D:\\better-crawler-4-agent\\scripts\\launch.py"],
+      "env": {
+        "BETTER_CRAWLER_BROWSERS_PATH": "D:\\better-crawler-4-agent\\.playwright"
       }
     }
   }
 }
 ```
+
+放置位置：
+
+| 客户端 | 位置 |
+|---|---|
+| Claude Code | 项目级 `<项目>/.mcp.json`，或用户级 `~/.claude.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf / Cline | 各自的 MCP 设置里粘贴 JSON |
+| ZCode | `~/.zcode/cli/config.json` 的 `mcp.servers` 字段（注意是 `mcp.servers`，不是 `mcpServers`） |
+| Codex | `~/.codex/config.toml`，用 `[mcp_servers.better-crawler]` TOML 段 |
+
+仓库根目录也带了一份 `.mcp.json`，用相对路径，方便直接引用。
+
+### 不经 MCP 直接用
+
+```python
+import sys
+sys.path.insert(0, r"D:\better-crawler-4-agent\src")
+
+from better_crawler import Fetcher
+
+f = Fetcher()
+await f.start()
+result = await f.fetch("https://example.com/article")
+print(result.content)
+await f.close()
+```
+
+`install.py --print-config` 会打印适合你环境的这段代码。
+
+### skill 复用
+
+`skills/web-to-text/SKILL.md` 是纯 Markdown，与厂商无关。支持 skill 的 agent（Claude Code、ZCode 等）可直接把 `skills/` 下的目录复制到自己的 skill 目录；不支持的，可以把内容并入系统提示词或项目说明文件。
 
 ## 工具
 
@@ -126,7 +166,7 @@ python scripts/selfcheck.py --offline  # 不联网
 
 ```
 better-crawler-4-agent/
-├── .zcode-plugin/plugin.json    # 插件清单（skills + mcpServers）
+├── .mcp.json                    # 通用 MCP 配置（相对路径，可直接引用）
 ├── skills/web-to-text/SKILL.md  # 技能：何时用、如何选 URL、如何判断结果
 ├── src/better_crawler/
 │   ├── browser.py               # 共享 Chromium 单例、指纹、崩溃重建
@@ -136,7 +176,7 @@ better-crawler-4-agent/
 │   └── mcp_server.py            # MCP 工具定义
 ├── scripts/
 │   ├── launch.py                # 启动器：解析解释器与浏览器路径
-│   ├── install.py               # 安装
+│   ├── install.py               # 安装 + 打印各 agent 配置
 │   └── selfcheck.py             # 自检
 ├── requirements.txt
 └── pyproject.toml
