@@ -114,8 +114,20 @@ Claude Code / Cursor / Windsurf / Cline 等通用：
 | Windsurf / Cline | 各自的 MCP 设置里粘贴 JSON |
 | ZCode | `~/.zcode/cli/config.json` 的 `mcp.servers` 字段 |
 | Codex | `~/.codex/config.toml` → `[mcp_servers.better-crawler]` |
+| DeepSeek Harness (dsh) | 用仓库自带的 `dsh-plugin/`，见下 |
 
 仓库根目录带了一份 `.mcp.json`（相对路径），可直接引用。
+
+### DeepSeek Harness（dsh）
+
+dsh 的插件形态和通用 MCP 配置不同：dsh 插件是一个声明了 `dsh.bundle.patch` 的包。`dsh-plugin/` 就是这层适配——一个 bundle，通过 `@deepseek-ai/dsh-mcp-client` 把本仓库的 MCP server 注册进 profile，并顺带发布 `skills/web-to-text`。
+
+```sh
+./dsh-plugin/install.sh          # 装进 web profile（默认）
+./dsh-plugin/install.sh tui      # 或指定 profile
+```
+
+装好后模型多出三个工具：`mcp__better-crawler__fetch_url`、`mcp__better-crawler__fetch_urls`、`mcp__better-crawler__crawler_status`。暂存机制、可覆盖的配置项、解释器与浏览器路径的解析方式见 `dsh-plugin/README.md`。
 
 ### 不用 MCP，直接当库调用
 
@@ -296,6 +308,7 @@ python -m playwright install chromium
 ```
 better-crawler4agent/
 ├── .mcp.json                    # 通用 MCP 配置（相对路径）
+├── dsh-plugin/                  # DeepSeek Harness 插件：bundle + 安装脚本
 ├── skills/web-to-text/SKILL.md  # 技能：何时用、如何选 URL、如何判断结果
 ├── src/better_crawler/
 │   ├── browser.py               # 共享 Chromium 单例、指纹、崩溃重建

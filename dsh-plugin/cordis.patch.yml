@@ -1,0 +1,37 @@
+# DeepSeek Harness (dsh) bundle patch for better-crawler-4-agent.
+#
+# One insert over the profile root: an MCP client row that launches this
+# repository's stdio MCP server (`scripts/launch.py`), so the model gets the
+# crawler's tools under a stable namespace:
+#
+#   mcp__better-crawler__fetch_url
+#   mcp__better-crawler__fetch_urls
+#   mcp__better-crawler__crawler_status
+#
+# The launcher path below is a placeholder token, NOT a usable path:
+# `install.sh` stages a copy of this directory with that token replaced by its
+# real absolute location, because a stdio MCP row has to name an absolute
+# launcher path. Run `./install.sh` rather than adding this directory to a
+# profile by hand.
+#
+# `mcp-better-crawler` is an ordinary patch-addressable row: a profile
+# cordis.patch.yml or a `--patch` overlay can disable it, retarget `command`,
+# or change the timeout without touching this bundle.
+
+- insert:
+    - id: mcp-better-crawler
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: better-crawler
+        transport: stdio
+        command: /bin/sh
+        args:
+          - __PLUGIN_DIR__/scripts/launch.sh
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+          BETTER_CRAWLER_TIMEOUT: '25'
+          BETTER_CRAWLER_MAX_CHARS: '50000'
+        # `fetch_urls` may legitimately run tens of seconds on a batch; the
+        # MCP SDK default of 60s would cut long batches short.
+        toolCallTimeoutMs: 180000
