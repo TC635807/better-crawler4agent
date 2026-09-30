@@ -1,18 +1,19 @@
 # DeepSeek Harness (dsh) bundle patch for better-crawler-4-agent.
 #
 # One insert over the profile root: an MCP client row that launches this
-# repository's stdio MCP server (`scripts/launch.py`), so the model gets the
-# crawler's tools under a stable namespace:
+# package's stdio MCP server (`dsh-plugin/scripts/launch.sh`), so the model
+# gets the crawler's tools under a stable namespace:
 #
 #   mcp__better-crawler__fetch_url
 #   mcp__better-crawler__fetch_urls
 #   mcp__better-crawler__crawler_status
 #
-# The launcher path below is a placeholder token, NOT a usable path:
-# `install.sh` stages a copy of this directory with that token replaced by its
-# real absolute location, because a stdio MCP row has to name an absolute
-# launcher path. Run `./install.sh` rather than adding this directory to a
-# profile by hand.
+# A stdio MCP row has to name an absolute launcher path, and where pnpm puts a
+# package is only known at boot. The `!!js` scalar below is evaluated by the
+# Loader when the row activates, against the entry context:
+# `ctx.get('profileContext')` carries the running profile's `dir`, so the path
+# lands inside this package wherever it was installed. Nothing here needs
+# editing after `dsh plugin add` — no install-time placeholder substitution.
 #
 # `mcp-better-crawler` is an ordinary patch-addressable row: a profile
 # cordis.patch.yml or a `--patch` overlay can disable it, retarget `command`,
@@ -26,7 +27,7 @@
         transport: stdio
         command: /bin/sh
         args:
-          - __PLUGIN_DIR__/scripts/launch.sh
+          - !!js 'ctx.get("profileContext").dir + "/node_modules/better-crawler-4-agent-dsh/dsh-plugin/scripts/launch.sh"'
         env:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: '1'

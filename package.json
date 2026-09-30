@@ -1,0 +1,33 @@
+{
+  "name": "better-crawler-4-agent-dsh",
+  "version": "1.1.0",
+  "private": true,
+  "description": "DeepSeek Harness (dsh) bundle for better-crawler-4-agent: registers this repository's real-browser URL-to-article-text MCP server in a dsh profile (fetch_url / fetch_urls / crawler_status).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TC635807/better-crawler4agent.git"
+  },
+  "homepage": "https://github.com/TC635807/better-crawler4agent#readme",
+  "bugs": {
+    "url": "https://github.com/TC635807/better-crawler4agent/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "playwright",
+    "crawler",
+    "url-to-text"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh-plugin/cordis.patch.yml"
+    }
+  }
+}

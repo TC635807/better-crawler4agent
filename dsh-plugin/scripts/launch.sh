@@ -19,17 +19,15 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # Repository root, in order of precedence:
 #   1. an explicit BETTER_CRAWLER_REPO
 #   2. the layout this file ships in (<repo>/dsh-plugin/scripts/launch.sh)
-#   3. the absolute path install.sh bakes into the staged copy it registers.
-#      The token on that assignment is the only placeholder in this file, so
-#      replacement is unambiguous; an unsubstituted run falls through to the
-#      existence check below and fails with a readable message.
 DERIVED=$(CDPATH= cd -- "$HERE/../.." 2>/dev/null && pwd || printf '')
 if [ -n "${BETTER_CRAWLER_REPO:-}" ]; then
 	REPO=$BETTER_CRAWLER_REPO
 elif [ -n "$DERIVED" ] && [ -f "$DERIVED/scripts/launch.py" ]; then
 	REPO=$DERIVED
 else
-	REPO=__REPO_DIR__
+	echo "better-crawler: cannot locate scripts/launch.py from $HERE" >&2
+	echo "better-crawler: set BETTER_CRAWLER_REPO to this repository's root" >&2
+	exit 1
 fi
 
 LAUNCH=$REPO/scripts/launch.py
